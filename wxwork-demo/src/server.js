@@ -3,7 +3,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { config, requireCallbackUrl } from "./config.js";
-import { pushEvent, store, updateActive } from "./store.js";
+import { checkConnection } from "./db.js";
+import { getEvents, getLatestActive, pushEvent, store, updateActive } from "./store.js";
 import {
   automaticLogin,
   checkCode,
@@ -142,18 +143,19 @@ function extractLoginState(payload) {
 
 async function tryReconnect(reason) {
   if (store.monitor.reconnecting) return;
-  if (!store.active.vid) return;
+  const active = await getLatestActive();
+  if (!active.vid) return;
   store.monitor.reconnecting = true;
   store.monitor.lastReconnectAt = nowIso();
   try {
     requireCallbackUrl();
-    const initResp = await initClient({ vid: store.active.vid });
+    const initResp = await initClient({ vid: active.vid });
     const initData = initResp.data?.data || {};
     const uuid = initData.uuid || initResp.data?.uuid || "";
     if (!uuid) {
       throw new Error(`重连 init 未返回 uuid: ${JSON.stringify(initResp.data)}`);
     }
-    updateActive({
+    await updateActive({
       uuid,
       isLogin: false,
       qrcode: "",
@@ -166,14 +168,14 @@ async function tryReconnect(reason) {
       uuid,
       callbackUrl: config.callbackUrl
     });
-    pushEvent({
+    await pushEvent({
       stage: "reconnect_set_callback",
       request: { uuid, reason },
       response: cbResp.data
     });
 
     const autoResp = await automaticLogin({ uuid });
-    pushEvent({
+    await pushEvent({
       stage: "reconnect_automatic_login",
       request: { uuid, reason },
       response: autoResp.data
@@ -184,7 +186,7 @@ async function tryReconnect(reason) {
       String(autoResp.data?.errcode ?? autoResp.data?.error_code ?? "0") === "0" &&
       !/失败|error|fail/i.test(okText);
     if (autoOk) {
-      updateActive({
+      await updateActive({
         isLogin: true,
         lastEvent: `reconnect:auto_success:${reason}`,
         lastError: ""
@@ -202,39 +204,40 @@ async function tryReconnect(reason) {
       qrResp.data?.qrcode ||
       "";
     const qrcodeKey = extractQrcodeKey(qrResp.data);
-    updateActive({
+    await updateActive({
       qrcode,
       qrcodeKey,
       isLogin: false,
       lastEvent: `reconnect:qrcode_ready:${reason}`,
       lastError: qrcode ? "" : "重连自动登录失败且未获取到二维码"
     });
-    pushEvent({
+    await pushEvent({
       stage: "reconnect_get_qrcode",
       request: { uuid, reason },
       response: qrResp.data
     });
   } catch (error) {
     const detail = serializeError(error);
-    updateActive({
+    await updateActive({
       lastError: `重连失败: ${detail.message}`,
       lastEvent: `reconnect:error:${reason}`
     });
-    pushEvent({ stage: "reconnect_error", reason, error: detail });
+    await pushEvent({ stage: "reconnect_error", reason, error: detail });
   } finally {
     store.monitor.reconnecting = false;
   }
 }
 
 async function checkOnlineAndMaybeReconnect(reason = "poll") {
-  if (!store.active.uuid) return;
+  const active = await getLatestActive();
+  if (!active.uuid) return;
   store.monitor.running = true;
   store.monitor.lastCheckAt = nowIso();
   try {
-    const resp = await getRunClientByUuid({ uuid: store.active.uuid });
-    pushEvent({
+    const resp = await getRunClientByUuid({ uuid: active.uuid });
+    await pushEvent({
       stage: "monitor_check",
-      request: { uuid: store.active.uuid, reason },
+      request: { uuid: active.uuid, reason },
       response: resp.data
     });
     const text = JSON.stringify(resp.data || {});
@@ -246,7 +249,7 @@ async function checkOnlineAndMaybeReconnect(reason = "poll") {
       /未登录|离线|不存在|not.*found|offline|disconnect/i.test(text);
 
     if (maybeOffline) {
-      updateActive({
+      await updateActive({
         isLogin: false,
         lastEvent: `monitor:offline:${reason}`,
         lastError: `检测离线: errcode=${errcode ?? "unknown"}`
@@ -256,7 +259,7 @@ async function checkOnlineAndMaybeReconnect(reason = "poll") {
       const online =
         loginState === true ||
         /"isLogin":true|"is_login":"?true"?/i.test(text);
-      updateActive({
+      await updateActive({
         isLogin: online,
         lastEvent: `monitor:online:${reason}`,
         lastError: ""
@@ -264,8 +267,8 @@ async function checkOnlineAndMaybeReconnect(reason = "poll") {
     }
   } catch (error) {
     const detail = serializeError(error);
-    pushEvent({ stage: "monitor_check_error", reason, error: detail });
-    updateActive({ lastError: `状态检测失败: ${detail.message}` });
+    await pushEvent({ stage: "monitor_check_error", reason, error: detail });
+    await updateActive({ lastError: `状态检测失败: ${detail.message}` });
   } finally {
     store.monitor.running = false;
   }
@@ -303,9 +306,11 @@ app.get("/api/upstream-check", async (_req, res) => {
   }
 });
 
-app.get("/api/state", (_req, res) => {
+app.get("/api/state", async (_req, res) => {
+  const active = await getLatestActive();
+  const events = await getEvents();
   res.json({
-    active: store.active,
+    active,
     monitor: {
       enabled: store.monitor.enabled,
       running: store.monitor.running,
@@ -314,14 +319,15 @@ app.get("/api/state", (_req, res) => {
       reconnecting: store.monitor.reconnecting,
       intervalMs: config.monitorIntervalMs
     },
-    eventsCount: store.events.length,
+    eventsCount: events.length,
     baseUrl: config.baseUrl,
     callbackUrl: config.callbackUrl || ""
   });
 });
 
-app.get("/api/events", (_req, res) => {
-  res.json({ events: store.events });
+app.get("/api/events", async (_req, res) => {
+  const events = await getEvents();
+  res.json({ events });
 });
 
 function buildInitPayload(body = {}) {
@@ -356,13 +362,13 @@ app.post("/api/init", async (req, res) => {
     const initPayload = buildInitPayload(req.body || {});
 
     const initResp = await initClient(initPayload);
-    pushEvent({ stage: "init", request: initPayload, response: initResp.data });
+    await pushEvent({ stage: "init", request: initPayload, response: initResp.data });
     const initData = initResp.data?.data || {};
     const uuid = initData.uuid || initResp.data?.uuid || "";
     const isLogin = String(initData.is_login || "").toLowerCase() === "true";
 
     if (!uuid) {
-      updateActive({
+      await updateActive({
         vid: initPayload.vid,
         lastError: initResp.data?.errmsg || "init 未返回 uuid"
       });
@@ -374,7 +380,7 @@ app.post("/api/init", async (req, res) => {
       });
     }
 
-    updateActive({
+    await updateActive({
       uuid,
       vid: initPayload.vid,
       isLogin,
@@ -392,8 +398,8 @@ app.post("/api/init", async (req, res) => {
     });
   } catch (error) {
     const detail = serializeError(error);
-    updateActive({ lastError: detail.message });
-    pushEvent({ stage: "init_error", error: detail });
+    await updateActive({ lastError: detail.message });
+    await pushEvent({ stage: "init_error", error: detail });
     res.status(500).json({
       ok: false,
       message: detail.message,
@@ -404,7 +410,8 @@ app.post("/api/init", async (req, res) => {
 
 app.post("/api/set-callback", async (req, res) => {
   try {
-    const uuid = String(req.body?.uuid || store.active.uuid || "");
+    const active = await getLatestActive();
+    const uuid = String(req.body?.uuid || active.uuid || "");
     if (!uuid) {
       return res.status(400).json({ ok: false, message: "缺少 uuid，请先初始化" });
     }
@@ -414,12 +421,12 @@ app.post("/api/set-callback", async (req, res) => {
       return res.status(400).json({ ok: false, message: "缺少回调地址 url（或配置 CALLBACK_URL）" });
     }
     const callbackResp = await setCallbackUrl({ uuid, callbackUrl });
-    pushEvent({
+    await pushEvent({
       stage: "set_callback",
       request: { uuid, callbackUrl },
       response: callbackResp.data
     });
-    updateActive({
+    await updateActive({
       uuid,
       lastEvent: "set_callback_success",
       lastError: ""
@@ -432,7 +439,7 @@ app.post("/api/set-callback", async (req, res) => {
     });
   } catch (error) {
     const detail = serializeError(error);
-    pushEvent({ stage: "set_callback_error", error: detail });
+    await pushEvent({ stage: "set_callback_error", error: detail });
     res.status(500).json({
       ok: false,
       message: detail.message,
@@ -443,15 +450,16 @@ app.post("/api/set-callback", async (req, res) => {
 
 app.post("/api/get-qrcode", async (req, res) => {
   try {
-    const uuid = String(req.body?.uuid || store.active.uuid || "");
+    const active = await getLatestActive();
+    const uuid = String(req.body?.uuid || active.uuid || "");
     if (!uuid) {
       return res.status(400).json({ ok: false, message: "缺少 uuid，请先初始化" });
     }
     const qrResp = await getQrCode({ uuid });
-    pushEvent({ stage: "get_qrcode", request: { uuid }, response: qrResp.data });
+    await pushEvent({ stage: "get_qrcode", request: { uuid }, response: qrResp.data });
     const { qrcode, qrcodeKey } = parseQrResult(qrResp);
 
-    updateActive({
+    await updateActive({
       uuid,
       qrcode,
       qrcodeKey,
@@ -468,8 +476,8 @@ app.post("/api/get-qrcode", async (req, res) => {
     });
   } catch (error) {
     const detail = serializeError(error);
-    updateActive({ lastError: detail.message });
-    pushEvent({ stage: "get_qrcode_error", error: detail });
+    await updateActive({ lastError: detail.message });
+    await pushEvent({ stage: "get_qrcode_error", error: detail });
     res.status(500).json({
       ok: false,
       message: detail.message,
@@ -482,7 +490,7 @@ app.post("/api/start-login", async (req, res) => {
   try {
     const initPayload = buildInitPayload(req.body || {});
     const initResp = await initClient(initPayload);
-    pushEvent({ stage: "init", request: initPayload, response: initResp.data });
+    await pushEvent({ stage: "init", request: initPayload, response: initResp.data });
     const initData = initResp.data?.data || {};
     const uuid = initData.uuid || initResp.data?.uuid || "";
     const isLogin = String(initData.is_login || "").toLowerCase() === "true";
@@ -494,7 +502,7 @@ app.post("/api/start-login", async (req, res) => {
         raw: initResp.data
       });
     }
-    updateActive({ uuid, vid: initPayload.vid, isLogin, lastEvent: "init_success" });
+    await updateActive({ uuid, vid: initPayload.vid, isLogin, lastEvent: "init_success" });
     const callbackUrl = String(req.body?.url || req.body?.callbackUrl || config.callbackUrl || "");
     if (!callbackUrl) {
       return res.status(400).json({
@@ -506,37 +514,39 @@ app.post("/api/start-login", async (req, res) => {
     await setCallbackUrl({ uuid, callbackUrl });
     const qrResp = await getQrCode({ uuid });
     const { qrcode, qrcodeKey } = parseQrResult(qrResp);
-    updateActive({ qrcode, qrcodeKey, lastEvent: "qrcode_ready" });
+    await updateActive({ qrcode, qrcodeKey, lastEvent: "qrcode_ready" });
     return res.json({ ok: true, uuid, isLogin, qrcode, qrcodeKey });
   } catch (error) {
     const detail = serializeError(error);
-    pushEvent({ stage: "start_login_error", error: detail });
+    await pushEvent({ stage: "start_login_error", error: detail });
     return res.status(500).json({ ok: false, message: detail.message, detail });
   }
 });
 
 app.post("/api/automatic-login", async (req, res) => {
   try {
-    const uuid = String(req.body?.uuid || store.active.uuid || "");
+    const active = await getLatestActive();
+    const uuid = String(req.body?.uuid || active.uuid || "");
     if (!uuid) {
       return res.status(400).json({ ok: false, message: "缺少 uuid" });
     }
 
     const resp = await automaticLogin({ uuid });
-    pushEvent({ stage: "automatic_login", request: { uuid }, response: resp.data });
+    await pushEvent({ stage: "automatic_login", request: { uuid }, response: resp.data });
     res.json({ ok: true, raw: resp.data });
   } catch (error) {
     const detail = serializeError(error);
-    pushEvent({ stage: "automatic_login_error", error: detail });
+    await pushEvent({ stage: "automatic_login_error", error: detail });
     res.status(500).json({ ok: false, message: detail.message, detail });
   }
 });
 
 app.post("/api/check-code", async (req, res) => {
   try {
-    const uuid = String(req.body?.uuid || store.active.uuid || "");
+    const active = await getLatestActive();
+    const uuid = String(req.body?.uuid || active.uuid || "");
     const code = String(req.body?.code || "").trim();
-    const qrcodeKey = String(req.body?.qrcodeKey || store.active.qrcodeKey || "").trim();
+    const qrcodeKey = String(req.body?.qrcodeKey || active.qrcodeKey || "").trim();
     if (!uuid) return res.status(400).json({ ok: false, message: "缺少 uuid，请先初始化登录" });
     if (!/^\d{6}$/.test(code)) {
       return res.status(400).json({ ok: false, message: "验证码必须是6位数字" });
@@ -545,7 +555,7 @@ app.post("/api/check-code", async (req, res) => {
       return res.status(400).json({ ok: false, message: "缺少 qrcodeKey，请先获取二维码或手动输入" });
     }
     const resp = await checkCode({ uuid, qrcodeKey, code });
-    pushEvent({
+    await pushEvent({
       stage: "check_code",
       request: { uuid, qrcodeKey, code: "******" },
       response: resp.data
@@ -553,7 +563,7 @@ app.post("/api/check-code", async (req, res) => {
     const errcode = Number(resp.data?.errcode ?? resp.data?.error_code ?? -1);
     const errmsg = String(resp.data?.errmsg ?? resp.data?.error_msg ?? "");
     if (errcode !== 0) {
-      updateActive({
+      await updateActive({
         isLogin: false,
         lastEvent: "check_code:failed",
         lastError: errmsg || `check_code errcode=${errcode}`
@@ -567,9 +577,9 @@ app.post("/api/check-code", async (req, res) => {
 
     const loginState = extractLoginState(resp.data);
     if (loginState === true) {
-      updateActive({ isLogin: true, lastEvent: "check_code:success", lastError: "" });
+      await updateActive({ isLogin: true, lastEvent: "check_code:success", lastError: "" });
     } else {
-      updateActive({
+      await updateActive({
         isLogin: false,
         lastEvent: "check_code:submitted_wait_callback",
         lastError: ""
@@ -578,14 +588,15 @@ app.post("/api/check-code", async (req, res) => {
     res.json({ ok: true, raw: resp.data });
   } catch (error) {
     const detail = serializeError(error);
-    pushEvent({ stage: "check_code_error", error: detail });
+    await pushEvent({ stage: "check_code_error", error: detail });
     res.status(500).json({ ok: false, message: detail.message, detail });
   }
 });
 
 app.post("/api/refresh-run-client", async (req, res) => {
   try {
-    const uuid = String(req.body?.uuid || store.active.uuid || "");
+    const active = await getLatestActive();
+    const uuid = String(req.body?.uuid || active.uuid || "");
     if (!uuid) {
       return res.status(400).json({ ok: false, message: "缺少 uuid" });
     }
@@ -597,14 +608,14 @@ app.post("/api/refresh-run-client", async (req, res) => {
 
     const loginState = extractLoginState(runByUuidResp.data);
     if (loginState !== null) {
-      updateActive({
+      await updateActive({
         isLogin: loginState,
         lastEvent: "refresh_status",
         lastError: ""
       });
     }
 
-    pushEvent({
+    await pushEvent({
       stage: "refresh_status",
       request: { uuid },
       response: {
@@ -620,7 +631,7 @@ app.post("/api/refresh-run-client", async (req, res) => {
     });
   } catch (error) {
     const detail = serializeError(error);
-    pushEvent({ stage: "get_run_client_error", error: detail });
+    await pushEvent({ stage: "get_run_client_error", error: detail });
     res.status(500).json({ ok: false, message: detail.message, detail });
   }
 });
@@ -644,7 +655,8 @@ app.post("/api/monitor/stop", (_req, res) => {
 
 app.post("/api/send-text", async (req, res) => {
   try {
-    const uuid = String(req.body?.uuid || store.active.uuid || "");
+    const active = await getLatestActive();
+    const uuid = String(req.body?.uuid || active.uuid || "");
     const content = String(req.body?.content || "");
     const sendUserid = String(req.body?.send_userid || req.body?.sendUserid || "");
     const kfIdRaw = req.body?.kf_id ?? req.body?.kfId ?? 0;
@@ -667,7 +679,7 @@ app.post("/api/send-text", async (req, res) => {
     };
 
     const resp = await sendTextMsg(payload);
-    pushEvent({
+    await pushEvent({
       stage: "send_text",
       request: payload,
       response: resp.data
@@ -675,14 +687,15 @@ app.post("/api/send-text", async (req, res) => {
     res.json({ ok: true, request: payload, raw: resp.data });
   } catch (error) {
     const detail = serializeError(error);
-    pushEvent({ stage: "send_text_error", error: detail });
+    await pushEvent({ stage: "send_text_error", error: detail });
     res.status(500).json({ ok: false, message: detail.message, detail });
   }
 });
 
 app.post("/api/contacts", async (req, res) => {
   try {
-    const uuid = String(req.body?.uuid || store.active.uuid || "");
+    const active = await getLatestActive();
+    const uuid = String(req.body?.uuid || active.uuid || "");
     if (!uuid) {
       return res.status(400).json({ ok: false, message: "缺少 uuid，请先登录" });
     }
@@ -726,7 +739,7 @@ app.post("/api/contacts", async (req, res) => {
       externalResp.data?.data ||
       [];
 
-    pushEvent({
+    await pushEvent({
       stage: "get_contacts",
       request: { uuid, innerPayload, externalPayload },
       response: {
@@ -753,12 +766,12 @@ app.post("/api/contacts", async (req, res) => {
     });
   } catch (error) {
     const detail = serializeError(error);
-    pushEvent({ stage: "get_contacts_error", error: detail });
+    await pushEvent({ stage: "get_contacts_error", error: detail });
     res.status(500).json({ ok: false, message: detail.message, detail });
   }
 });
 
-app.post("/callback/wxwork", (req, res) => {
+app.post("/callback/wxwork", async (req, res) => {
   const payload = req.body || {};
   const text = JSON.stringify(payload);
   const maybeUuid =
@@ -775,36 +788,37 @@ app.post("/callback/wxwork", (req, res) => {
     "callback";
   const qrcodeKey = extractQrcodeKey(payload);
 
-  pushEvent({
+  await pushEvent({
     stage: "callback",
     eventType,
     payload
   });
 
+  const active = await getLatestActive();
   const isLoginSuccess = /登录成功|login.*success|is_login/i.test(text);
   if (isLoginSuccess) {
-    updateActive({
+    await updateActive({
       isLogin: true,
-      uuid: maybeUuid || store.active.uuid,
-      qrcodeKey: qrcodeKey || store.active.qrcodeKey,
+      uuid: maybeUuid || active.uuid,
+      qrcodeKey: qrcodeKey || active.qrcodeKey,
       lastEvent: `callback:${eventType}`,
       lastError: ""
     });
   } else if (maybeUuid) {
-    updateActive({
+    await updateActive({
       uuid: maybeUuid,
-      qrcodeKey: qrcodeKey || store.active.qrcodeKey,
+      qrcodeKey: qrcodeKey || active.qrcodeKey,
       lastEvent: `callback:${eventType}`
     });
   } else {
-    updateActive({
-      qrcodeKey: qrcodeKey || store.active.qrcodeKey,
+    await updateActive({
+      qrcodeKey: qrcodeKey || active.qrcodeKey,
       lastEvent: `callback:${eventType}`
     });
   }
 
   if (hasDisconnectSignal(text)) {
-    updateActive({
+    await updateActive({
       isLogin: false,
       lastEvent: `callback:disconnect:${eventType}`
     });
@@ -814,7 +828,14 @@ app.post("/callback/wxwork", (req, res) => {
   res.json({ errcode: 0, errmsg: "ok" });
 });
 
-app.listen(config.port, () => {
+app.listen(config.port, async () => {
+  try {
+    await checkConnection();
+    console.log("[wxwork-demo] MySQL connected");
+  } catch (err) {
+    console.error("[wxwork-demo] MySQL connection failed:", err.message);
+    process.exit(1);
+  }
   startMonitor();
   console.log(
     `[wxwork-demo] listening on http://localhost:${config.port} baseUrl=${config.baseUrl}`
