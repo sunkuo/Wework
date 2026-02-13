@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>wxwork 登录 Demo</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <h1>wxwork 登录 Demo</h1>
+      <p class="sub">baseUrl 固定为 47.94.7.218:9952（可通过 .env 覆盖）</p>
+
+      <section class="card">
+        <h2>登录模式与公共参数</h2>
+        <p class="sub">首次登录必须走验证码；自动登录必须传已保存的vid</p>
+        <div class="grid grid-2">
+          <div class="row">
+            <label for="modeFirst">登录模式</label>
+            <div>
+              <label><input type="radio" name="loginMode" id="modeFirst" value="first" checked /> 首次登录（无vid，强制验证码）</label>
+              <br />
+              <label><input type="radio" name="loginMode" id="modeAuto" value="auto" /> 自动登录（有vid）</label>
+            </div>
+          </div>
+          <div class="row">
+            <label for="vid">vid</label>
+            <input id="vid" placeholder="自动登录必填；首次登录留空" />
+          </div>
+        </div>
+        <div class="grid grid-2">
+          <div class="row">
+            <label for="deverType">deverType</label>
+            <input id="deverType" value="ipad" placeholder="默认 ipad" />
+          </div>
+          <div class="row">
+            <label for="ip">ip</label>
+            <input id="ip" placeholder="代理IP" />
+          </div>
+          <div class="row">
+            <label for="port">port</label>
+            <input id="port" placeholder="代理端口" />
+          </div>
+          <div class="row">
+            <label for="proxyType">proxyType</label>
+            <input id="proxyType" placeholder="http / https / socks5" />
+          </div>
+          <div class="row">
+            <label for="proxySituation">proxySituation</label>
+            <input id="proxySituation" value="0" placeholder="0非全局，1全局" />
+          </div>
+          <div class="row">
+            <label for="userName">userName</label>
+            <input id="userName" placeholder="代理用户名（可空）" />
+          </div>
+          <div class="row">
+            <label for="passward">passward</label>
+            <input id="passward" type="password" placeholder="代理密码（可空）" />
+          </div>
+          <div class="row">
+            <label for="callbackUrl">url(回调地址)</label>
+            <input id="callbackUrl" placeholder="https://xxx/callback/wxwork" />
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>首次登录流程（无vid）</h2>
+        <p class="sub">固定顺序：初始化 -> 设置回调 -> 获取二维码 -> 提交验证码（必调）</p>
+        <div class="actions">
+          <button id="btnInit">1) 初始化</button>
+          <button id="btnSetCallback">2) 设置回调</button>
+          <button id="btnGetQr">3) 获取二维码</button>
+        </div>
+        <div class="grid grid-2">
+          <div class="row">
+            <label for="uuid">uuid</label>
+            <input id="uuid" placeholder="初始化后自动回填，可手动覆盖" />
+          </div>
+          <div class="row">
+            <label for="qrcodeKey">qrcodeKey</label>
+            <input id="qrcodeKey" placeholder="获取二维码后自动回填，可手动粘贴" />
+          </div>
+          <div class="row">
+            <label for="code6">6位验证码</label>
+            <input id="code6" maxlength="6" placeholder="输入手机上的6位验证码" />
+          </div>
+        </div>
+        <div class="actions">
+          <button id="btnCheckCode">4) 提交验证码（首次必调）</button>
+        </div>
+        <div class="status" id="stepFirst"></div>
+        <div class="qrcodeWrap">
+          <img id="qrcodeImg" alt="登录二维码" style="display:none;max-width:260px;border-radius:8px;border:1px solid #c7d0dc;background:#fff;padding:6px;" />
+        </div>
+        <pre id="qrcode" class="qrcode"></pre>
+      </section>
+
+      <section class="card">
+        <h2>自动登录流程（有vid）</h2>
+        <p class="sub">固定顺序：初始化(带vid) -> 设置回调 -> 自动登录，失败后回退获取二维码</p>
+        <div class="actions">
+          <button id="btnAutoInit">1) 初始化(带vid)</button>
+          <button id="btnAutoSetCallback">2) 设置回调</button>
+          <button id="btnAuto">3) 自动登录</button>
+          <button id="btnAutoFallbackQr">4) 自动登录失败后获取二维码</button>
+        </div>
+        <div class="status" id="stepAuto"></div>
+      </section>
+
+      <section class="card">
+        <h2>状态维护</h2>
+        <div class="actions">
+          <button id="btnRefresh">刷新状态（GetRunClient+ByUuid）</button>
+        </div>
+        <div class="status" id="status"></div>
+        <div class="grid grid-2">
+          <div>
+            <h3>GetRunClient（数组统计）</h3>
+            <pre id="refreshRunClient" class="events small">暂无刷新结果</pre>
+          </div>
+          <div>
+            <h3>GetRunClientByUuid（object）</h3>
+            <pre id="refreshByUuid" class="events small">暂无刷新结果</pre>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>步骤3：业务接口调用</h2>
+        <div class="grid grid-2">
+          <div>
+            <h3>发送文本消息</h3>
+            <div class="row">
+              <label for="sendUuid">uuid</label>
+              <input id="sendUuid" placeholder="默认使用当前会话uuid" />
+            </div>
+            <div class="row">
+              <label for="sendUserid">send_userid</label>
+              <input id="sendUserid" placeholder="文档字段：接收方用户ID" />
+            </div>
+            <div class="row">
+              <label for="kfId">kf_id</label>
+              <input id="kfId" value="0" placeholder="文档示例字段：默认0" />
+            </div>
+            <div class="row">
+              <label for="isRoom">isRoom</label>
+              <input id="isRoom" value="false" placeholder="true/false" />
+            </div>
+            <div class="row">
+              <label for="content">content</label>
+              <input id="content" placeholder="测试消息" value="hello from demo" />
+            </div>
+            <div class="actions">
+              <button id="btnSend">发送文本</button>
+            </div>
+            <pre id="sendResult" class="events small"></pre>
+          </div>
+          <div>
+            <h3>获取通讯录列表</h3>
+            <p class="sub">包含企业好友（GetInnerContacts）和微信好友（GetExternalContacts）</p>
+            <div class="row">
+              <label for="contactsUuid">uuid</label>
+              <input id="contactsUuid" placeholder="默认使用当前会话uuid" />
+            </div>
+            <div class="row">
+              <label for="innerLimit">inner.limit</label>
+              <input id="innerLimit" value="100" placeholder="GetInnerContacts 每页数量" />
+            </div>
+            <div class="row">
+              <label for="innerStrSeq">inner.strSeq</label>
+              <input id="innerStrSeq" value="" placeholder="内部通讯录翻页游标，首页留空" />
+            </div>
+            <div class="row">
+              <label for="externalLimit">external.limit</label>
+              <input id="externalLimit" value="100" placeholder="GetExternalContacts 每页数量" />
+            </div>
+            <div class="row">
+              <label for="externalStrSeq">external.strSeq</label>
+              <input id="externalStrSeq" value="" placeholder="外部通讯录翻页游标，首页留空" />
+            </div>
+            <div class="actions">
+              <button id="btnContacts">获取通讯录（双接口）</button>
+            </div>
+            <pre id="contacts" class="events small"></pre>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>回调日志（最近100条）</h2>
+        <pre id="events" class="events"></pre>
+      </section>
+    </main>
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>

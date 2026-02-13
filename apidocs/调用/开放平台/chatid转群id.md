@@ -1,0 +1,2 @@
+# chatid转群id
+
