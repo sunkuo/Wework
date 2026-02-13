@@ -155,16 +155,22 @@ export async function pushEvent(event) {
     // P2003: Foreign key constraint failed
     if (err.code === 'P2003' && finalSessionUuid) {
       console.warn(`[store] session ${finalSessionUuid} not found, saving as orphan event`);
-      await prisma.event.create({
-        data: {
-          session_uuid: undefined, // 存为无主事件
-          stage: `${stage} (orphan)`,
-          event_type: eventType,
-          payload: { ...sanitized, original_uuid: finalSessionUuid }
-        }
-      });
+      try {
+        await prisma.event.create({
+          data: {
+            session_uuid: undefined, // 存为无主事件
+            stage: `${stage} (orphan)`,
+            event_type: eventType,
+            payload: { ...sanitized, original_uuid: finalSessionUuid }
+          }
+        });
+      } catch (retryErr) {
+        console.error("[store] pushEvent orphan retry error:", retryErr.message);
+        throw retryErr;
+      }
     } else {
       console.error("[store] pushEvent error:", err.message);
+      throw err;
     }
   }
 }
