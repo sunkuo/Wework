@@ -74,10 +74,11 @@ function renderFlowSteps() {
 function updateButtons() {
   const isFirst = flow.mode === "first";
   const isAuto = flow.mode === "auto";
+  const hasUuid = Boolean(v("uuid"));
 
   $("btnInit").disabled = !isFirst;
   $("btnSetCallback").disabled = !isFirst || !flow.first.init;
-  $("btnGetQr").disabled = !isFirst || !flow.first.callback;
+  $("btnGetQr").disabled = !isFirst || !hasUuid;
   $("btnCheckCode").disabled = !isFirst || !flow.first.qrcode;
 
   $("btnAutoInit").disabled = !isAuto;
@@ -128,6 +129,7 @@ function renderState(state) {
   syncUuidInputs(a.uuid || "");
   setIfEmpty("qrcodeKey", a.qrcodeKey || extractKeyFromQrUrl(a.qrcode));
   setIfEmpty("callbackUrl", state?.callbackUrl || "");
+  updateButtons();
 }
 
 function renderEvents(events) {
@@ -444,6 +446,10 @@ $("btnContacts").addEventListener("click", async () => {
     stateEls.contacts.textContent = JSON.stringify({ ok: false, error: String(err) }, null, 2);
   }
   await refresh();
+});
+
+$("uuid").addEventListener("input", () => {
+  updateButtons();
 });
 
 if (stateEls.sendResult) {
