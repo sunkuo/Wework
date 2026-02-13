@@ -62,17 +62,6 @@ export async function updateActive(patch) {
     return { ...EMPTY_ACTIVE, ...patch, updatedAt: new Date().toISOString() };
   }
 
-  // 构建更新对象
-  // 注意：Prisma upsert 需要 create 和 update 数据
-  // patch 可能只包含部分字段，我们需要合并现有值？
-  // Prisma update 只更新提供的字段，这很方便。
-  // 但是 upsert 的 create 需要必填字段。
-  // 这里逻辑稍微复杂一点：如果不存在，用 patch + 默认值创建。
-  // 如果存在，用 patch 更新。
-
-  // 为了获取完整的 current 状态，我们可能需要先查一下？
-  // 或者直接用 upsert，但 create 部分需要填满默认值。
-  
   const dataToUpdate = {};
   if (patch.vid !== undefined) dataToUpdate.vid = patch.vid;
   if (patch.isLogin !== undefined) dataToUpdate.is_login = patch.isLogin ? 1 : 0;
@@ -143,45 +132,41 @@ export async function pushEvent(event) {
   const stage = sanitized.stage || "";
   const eventType = sanitized.eventType || "";
 
-  // 如果 sessionUuid 不存在，Prisma 可能会报错（外键约束）。
-  // 这里需要确保 session 存在？或者允许 session_uuid 为空？
-  // schema 中 session_uuid 是必须的且关联 session。
-  // 如果没有 session，我们可能无法插入 event。
-  // 原始代码没有外键约束，所以能插入。
-  // Prisma schema 里有 relation。
-  // 如果 session 不存在，我们需要创建它吗？或者忽略错误？
-  // 这里的 sessionUuid 可能为空字符串。
-  // 为了兼容，如果 sessionUuid 为空，或者找不到，我们可能需要先创建一个 dummy session？
-  // 或者修改 schema 允许 session_uuid 为空？
-  // 考虑到代码健壮性，如果 sessionUuid 为空，我们尝试用 "unknown" 或者空字符串创建 session。
-  
-  if (sessionUuid) {
-    // 尝试确保 session 存在 (ignore failures if race condition)
-    try {
-      await prisma.session.upsert({
-        where: { uuid: sessionUuid },
-        update: {},
-        create: { uuid: sessionUuid, vid: "auto-created" }
-      });
-    } catch (e) {
-      // ignore
-    }
-  } else {
-    // 如果没有 uuid，我们无法插入 event (违反外键约束)
-    // 除非我们放宽 schema。但现在 schema 已经定了。
-    // 我们可以跳过插入，或者记录到日志。
-    console.warn("[store] pushEvent 缺少 sessionUuid，跳过入库", stage);
-    return;
-  }
+  // 修复：如果不包含 sessionUuid，不再强行创建 Session，而是作为无主事件记录
+  // 必须把空字符串转为 null/undefined，否则 Prisma 会尝试去 sessions 表找空主键
+  const finalSessionUuid = sessionUuid || undefined; 
 
-  await prisma.event.create({
-    data: {
-      session_uuid: sessionUuid,
-      stage,
-      event_type: eventType,
-      payload: sanitized // Prisma Handles JSON automatically
+  // 注意：如果 sessionUuid 提供了，但在 sessions 表里找不到（外键约束失败），
+  // Prisma 还是会报错。这里我们有两个选择：
+  // 1. 让它报错（数据一致性优先）
+  // 2. 捕获错误并重试为无主事件
+  // 考虑到日志的不可丢失性，我们选择方案 2
+  
+  try {
+    await prisma.event.create({
+      data: {
+        session_uuid: finalSessionUuid,
+        stage,
+        event_type: eventType,
+        payload: sanitized
+      }
+    });
+  } catch (err) {
+    // P2003: Foreign key constraint failed
+    if (err.code === 'P2003' && finalSessionUuid) {
+      console.warn(`[store] session ${finalSessionUuid} not found, saving as orphan event`);
+      await prisma.event.create({
+        data: {
+          session_uuid: undefined, // 存为无主事件
+          stage: `${stage} (orphan)`,
+          event_type: eventType,
+          payload: { ...sanitized, original_uuid: finalSessionUuid }
+        }
+      });
+    } else {
+      console.error("[store] pushEvent error:", err.message);
     }
-  });
+  }
 }
 
 // ---------- 定时清理 events ----------
@@ -193,12 +178,8 @@ async function cleanupOldEvents() {
     const count = await prisma.event.count();
     if (count > config.maxEvents) {
       // 删除最早的 N 条
-      // Prisma 不支持直接 DELETE ... LIMIT (MySQL specific)
-      // 我们需要找出要删除的 ID 范围
       const deleteCount = count - config.maxEvents;
       
-      // 找出第 deleteCount 条记录的 id
-      // 或者找出最早的 deleteCount 条记录
       const eventsToDelete = await prisma.event.findMany({
         select: { id: true },
         orderBy: { created_at: 'asc' },
@@ -238,8 +219,6 @@ export async function getEvents(limit) {
   });
   
   return events.map((row) => {
-    // Prisma 自动解析 JSON payload，所以 row.payload 是对象
-    // 但原始代码期望它是展平的
     const payload = row.payload || {};
     return {
       time: row.created_at ? row.created_at.toISOString() : "",
