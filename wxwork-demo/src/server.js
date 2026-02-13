@@ -46,6 +46,24 @@ function serializeError(error) {
   };
 }
 
+/** pushEvent 的降级版本——catch 中使用，DB 抖动时不会再抛错 */
+async function safePushEvent(event) {
+  try {
+    await pushEvent(event);
+  } catch (e) {
+    console.error("[safePushEvent] fallback:", e.message);
+  }
+}
+
+/** updateActive 的降级版本——catch 中使用 */
+async function safeUpdateActive(patch) {
+  try {
+    await updateActive(patch);
+  } catch (e) {
+    console.error("[safeUpdateActive] fallback:", e.message);
+  }
+}
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -223,13 +241,13 @@ async function tryReconnect(reason) {
     const detail = serializeError(error);
     const fallbackUuid = uuid || active.uuid;
     if (fallbackUuid) {
-      await updateActive({
+      await safeUpdateActive({
         uuid: fallbackUuid,
         lastError: `重连失败: ${detail.message}`,
         lastEvent: `reconnect:error:${reason}`
       });
     }
-    await pushEvent({ stage: "reconnect_error", reason, error: detail });
+    await safePushEvent({ stage: "reconnect_error", reason, error: detail });
   } finally {
     store.monitor.reconnecting = false;
   }
@@ -276,8 +294,8 @@ async function checkOnlineAndMaybeReconnect(reason = "poll") {
     }
   } catch (error) {
     const detail = serializeError(error);
-    await pushEvent({ stage: "monitor_check_error", reason, error: detail });
-    await updateActive({ uuid: active.uuid, lastError: `状态检测失败: ${detail.message}` });
+    await safePushEvent({ stage: "monitor_check_error", reason, error: detail });
+    await safeUpdateActive({ uuid: active.uuid, lastError: `状态检测失败: ${detail.message}` });
   } finally {
     store.monitor.running = false;
   }
@@ -414,7 +432,7 @@ app.post("/api/init", async (req, res) => {
   } catch (error) {
     const detail = serializeError(error);
     // init 阶段可能没有 uuid，仅记录事件日志
-    await pushEvent({ stage: "init_error", error: detail });
+    await safePushEvent({ stage: "init_error", error: detail });
     res.status(500).json({
       ok: false,
       message: detail.message,
@@ -454,7 +472,7 @@ app.post("/api/set-callback", async (req, res) => {
     });
   } catch (error) {
     const detail = serializeError(error);
-    await pushEvent({ stage: "set_callback_error", error: detail });
+    await safePushEvent({ stage: "set_callback_error", error: detail });
     res.status(500).json({
       ok: false,
       message: detail.message,
@@ -464,9 +482,10 @@ app.post("/api/set-callback", async (req, res) => {
 });
 
 app.post("/api/get-qrcode", async (req, res) => {
-  const active = await getLatestActive();
-  const uuid = String(req.body?.uuid || active.uuid || "");
+  let uuid = "";
   try {
+    const active = await getLatestActive();
+    uuid = String(req.body?.uuid || active.uuid || "");
     if (!uuid) {
       return res.status(400).json({ ok: false, message: "缺少 uuid，请先初始化" });
     }
@@ -492,9 +511,9 @@ app.post("/api/get-qrcode", async (req, res) => {
   } catch (error) {
     const detail = serializeError(error);
     if (uuid) {
-      await updateActive({ uuid, lastError: detail.message });
+      await safeUpdateActive({ uuid, lastError: detail.message });
     }
-    await pushEvent({ stage: "get_qrcode_error", error: detail });
+    await safePushEvent({ stage: "get_qrcode_error", error: detail });
     res.status(500).json({
       ok: false,
       message: detail.message,
@@ -535,7 +554,7 @@ app.post("/api/start-login", async (req, res) => {
     return res.json({ ok: true, uuid, isLogin, qrcode, qrcodeKey });
   } catch (error) {
     const detail = serializeError(error);
-    await pushEvent({ stage: "start_login_error", error: detail });
+    await safePushEvent({ stage: "start_login_error", error: detail });
     return res.status(500).json({ ok: false, message: detail.message, detail });
   }
 });
@@ -553,7 +572,7 @@ app.post("/api/automatic-login", async (req, res) => {
     res.json({ ok: true, raw: resp.data });
   } catch (error) {
     const detail = serializeError(error);
-    await pushEvent({ stage: "automatic_login_error", error: detail });
+    await safePushEvent({ stage: "automatic_login_error", error: detail });
     res.status(500).json({ ok: false, message: detail.message, detail });
   }
 });
@@ -607,7 +626,7 @@ app.post("/api/check-code", async (req, res) => {
     res.json({ ok: true, raw: resp.data });
   } catch (error) {
     const detail = serializeError(error);
-    await pushEvent({ stage: "check_code_error", error: detail });
+    await safePushEvent({ stage: "check_code_error", error: detail });
     res.status(500).json({ ok: false, message: detail.message, detail });
   }
 });
@@ -651,21 +670,26 @@ app.post("/api/refresh-run-client", async (req, res) => {
     });
   } catch (error) {
     const detail = serializeError(error);
-    await pushEvent({ stage: "get_run_client_error", error: detail });
+    await safePushEvent({ stage: "get_run_client_error", error: detail });
     res.status(500).json({ ok: false, message: detail.message, detail });
   }
 });
 
 app.post("/api/monitor/start", async (_req, res) => {
-  startMonitor();
-  await checkOnlineAndMaybeReconnect("manual_start");
-  res.json({
-    ok: true,
-    monitor: {
-      enabled: store.monitor.enabled,
-      intervalMs: config.monitorIntervalMs
-    }
-  });
+  try {
+    startMonitor();
+    await checkOnlineAndMaybeReconnect("manual_start");
+    res.json({
+      ok: true,
+      monitor: {
+        enabled: store.monitor.enabled,
+        intervalMs: config.monitorIntervalMs
+      }
+    });
+  } catch (error) {
+    const detail = serializeError(error);
+    res.status(500).json({ ok: false, message: detail.message, detail });
+  }
 });
 
 app.post("/api/monitor/stop", (_req, res) => {
@@ -707,7 +731,7 @@ app.post("/api/send-text", async (req, res) => {
     res.json({ ok: true, request: payload, raw: resp.data });
   } catch (error) {
     const detail = serializeError(error);
-    await pushEvent({ stage: "send_text_error", error: detail });
+    await safePushEvent({ stage: "send_text_error", error: detail });
     res.status(500).json({ ok: false, message: detail.message, detail });
   }
 });
@@ -786,7 +810,7 @@ app.post("/api/contacts", async (req, res) => {
     });
   } catch (error) {
     const detail = serializeError(error);
-    await pushEvent({ stage: "get_contacts_error", error: detail });
+    await safePushEvent({ stage: "get_contacts_error", error: detail });
     res.status(500).json({ ok: false, message: detail.message, detail });
   }
 });
