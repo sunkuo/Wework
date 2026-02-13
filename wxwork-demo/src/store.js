@@ -54,14 +54,10 @@ export async function getLatestActive() {
 }
 
 export async function updateActive(patch) {
-  // 读取当前 uuid：优先用 patch 里的，其次用最近一条
-  let uuid = patch.uuid;
+  const uuid = patch.uuid;
   if (!uuid) {
-    const latest = await getLatestActive();
-    uuid = latest.uuid;
-  }
-  if (!uuid) {
-    // 没有 uuid，无法写入 sessions 表，仅返回
+    // uuid 是必须的，不再隐式 fallback 到最新一条，防止多账号串号
+    console.warn("[store] updateActive 缺少 uuid，跳过写库", patch.lastEvent || patch.lastError || "");
     return { ...EMPTY_ACTIVE, ...patch, updatedAt: new Date().toISOString() };
   }
 
@@ -151,16 +147,35 @@ export async function pushEvent(event) {
      VALUES (?, ?, ?, ?, NOW())`,
     [sessionUuid, stage, eventType, JSON.stringify(sanitized)]
   );
+}
 
-  // 清理超出上限的旧记录
-  const countRows = await query("SELECT COUNT(*) AS cnt FROM events");
-  const cnt = countRows[0]?.cnt || 0;
-  if (cnt > config.maxEvents) {
-    await query(
-      `DELETE FROM events ORDER BY created_at ASC LIMIT ?`,
-      [cnt - config.maxEvents]
-    );
+// ---------- 定时清理 events ----------
+
+let cleanupTimer = null;
+
+async function cleanupOldEvents() {
+  try {
+    const countRows = await query("SELECT COUNT(*) AS cnt FROM events");
+    const cnt = countRows[0]?.cnt || 0;
+    if (cnt > config.maxEvents) {
+      await query(
+        "DELETE FROM events ORDER BY created_at ASC LIMIT ?",
+        [cnt - config.maxEvents]
+      );
+    }
+  } catch (err) {
+    console.error("[store] events cleanup error:", err.message);
   }
+}
+
+export function startEventCleanup(intervalMs = 60000) {
+  if (cleanupTimer) clearInterval(cleanupTimer);
+  cleanupTimer = setInterval(cleanupOldEvents, intervalMs);
+}
+
+export function stopEventCleanup() {
+  if (cleanupTimer) clearInterval(cleanupTimer);
+  cleanupTimer = null;
 }
 
 export async function getEvents(limit) {

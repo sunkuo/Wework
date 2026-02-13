@@ -31,7 +31,25 @@ export async function queryOne(sql, params) {
 
 export async function checkConnection() {
   const conn = await getPool().getConnection();
-  await conn.ping();
-  conn.release();
+  try {
+    await conn.ping();
+  } finally {
+    conn.release();
+  }
+  return true;
+}
+
+const REQUIRED_TABLES = ["sessions", "events"];
+
+export async function checkTables() {
+  const rows = await query("SHOW TABLES");
+  // SHOW TABLES 返回的列名形如 Tables_in_<dbname>
+  const tables = rows.map((row) => Object.values(row)[0]);
+  const missing = REQUIRED_TABLES.filter((t) => !tables.includes(t));
+  if (missing.length > 0) {
+    throw new Error(
+      `MySQL 缺少必要的表: ${missing.join(", ")}。请先执行建表 SQL。`
+    );
+  }
   return true;
 }

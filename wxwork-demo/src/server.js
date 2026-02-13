@@ -3,8 +3,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { config, requireCallbackUrl } from "./config.js";
-import { checkConnection } from "./db.js";
-import { getEvents, getLatestActive, pushEvent, store, updateActive } from "./store.js";
+import { checkConnection, checkTables } from "./db.js";
+import { getEvents, getLatestActive, pushEvent, startEventCleanup, store, updateActive } from "./store.js";
 import {
   automaticLogin,
   checkCode,
@@ -147,11 +147,12 @@ async function tryReconnect(reason) {
   if (!active.vid) return;
   store.monitor.reconnecting = true;
   store.monitor.lastReconnectAt = nowIso();
+  let uuid = "";
   try {
     requireCallbackUrl();
     const initResp = await initClient({ vid: active.vid });
     const initData = initResp.data?.data || {};
-    const uuid = initData.uuid || initResp.data?.uuid || "";
+    uuid = initData.uuid || initResp.data?.uuid || "";
     if (!uuid) {
       throw new Error(`重连 init 未返回 uuid: ${JSON.stringify(initResp.data)}`);
     }
@@ -187,6 +188,7 @@ async function tryReconnect(reason) {
       !/失败|error|fail/i.test(okText);
     if (autoOk) {
       await updateActive({
+        uuid,
         isLogin: true,
         lastEvent: `reconnect:auto_success:${reason}`,
         lastError: ""
@@ -205,6 +207,7 @@ async function tryReconnect(reason) {
       "";
     const qrcodeKey = extractQrcodeKey(qrResp.data);
     await updateActive({
+      uuid,
       qrcode,
       qrcodeKey,
       isLogin: false,
@@ -218,10 +221,14 @@ async function tryReconnect(reason) {
     });
   } catch (error) {
     const detail = serializeError(error);
-    await updateActive({
-      lastError: `重连失败: ${detail.message}`,
-      lastEvent: `reconnect:error:${reason}`
-    });
+    const fallbackUuid = uuid || active.uuid;
+    if (fallbackUuid) {
+      await updateActive({
+        uuid: fallbackUuid,
+        lastError: `重连失败: ${detail.message}`,
+        lastEvent: `reconnect:error:${reason}`
+      });
+    }
     await pushEvent({ stage: "reconnect_error", reason, error: detail });
   } finally {
     store.monitor.reconnecting = false;
@@ -250,6 +257,7 @@ async function checkOnlineAndMaybeReconnect(reason = "poll") {
 
     if (maybeOffline) {
       await updateActive({
+        uuid: active.uuid,
         isLogin: false,
         lastEvent: `monitor:offline:${reason}`,
         lastError: `检测离线: errcode=${errcode ?? "unknown"}`
@@ -260,6 +268,7 @@ async function checkOnlineAndMaybeReconnect(reason = "poll") {
         loginState === true ||
         /"isLogin":true|"is_login":"?true"?/i.test(text);
       await updateActive({
+        uuid: active.uuid,
         isLogin: online,
         lastEvent: `monitor:online:${reason}`,
         lastError: ""
@@ -268,7 +277,7 @@ async function checkOnlineAndMaybeReconnect(reason = "poll") {
   } catch (error) {
     const detail = serializeError(error);
     await pushEvent({ stage: "monitor_check_error", reason, error: detail });
-    await updateActive({ lastError: `状态检测失败: ${detail.message}` });
+    await updateActive({ uuid: active.uuid, lastError: `状态检测失败: ${detail.message}` });
   } finally {
     store.monitor.running = false;
   }
@@ -368,10 +377,8 @@ app.post("/api/init", async (req, res) => {
     const isLogin = String(initData.is_login || "").toLowerCase() === "true";
 
     if (!uuid) {
-      await updateActive({
-        vid: initPayload.vid,
-        lastError: initResp.data?.errmsg || "init 未返回 uuid"
-      });
+      // 没有 uuid 无法写 sessions 表，仅记录日志
+      await pushEvent({ stage: "init_no_uuid", response: initResp.data });
       return res.status(400).json({
         ok: false,
         stage: "init",
@@ -398,7 +405,7 @@ app.post("/api/init", async (req, res) => {
     });
   } catch (error) {
     const detail = serializeError(error);
-    await updateActive({ lastError: detail.message });
+    // init 阶段可能没有 uuid，仅记录事件日志
     await pushEvent({ stage: "init_error", error: detail });
     res.status(500).json({
       ok: false,
@@ -476,7 +483,9 @@ app.post("/api/get-qrcode", async (req, res) => {
     });
   } catch (error) {
     const detail = serializeError(error);
-    await updateActive({ lastError: detail.message });
+    if (uuid) {
+      await updateActive({ uuid, lastError: detail.message });
+    }
     await pushEvent({ stage: "get_qrcode_error", error: detail });
     res.status(500).json({
       ok: false,
@@ -514,7 +523,7 @@ app.post("/api/start-login", async (req, res) => {
     await setCallbackUrl({ uuid, callbackUrl });
     const qrResp = await getQrCode({ uuid });
     const { qrcode, qrcodeKey } = parseQrResult(qrResp);
-    await updateActive({ qrcode, qrcodeKey, lastEvent: "qrcode_ready" });
+    await updateActive({ uuid, qrcode, qrcodeKey, lastEvent: "qrcode_ready" });
     return res.json({ ok: true, uuid, isLogin, qrcode, qrcodeKey });
   } catch (error) {
     const detail = serializeError(error);
@@ -564,6 +573,7 @@ app.post("/api/check-code", async (req, res) => {
     const errmsg = String(resp.data?.errmsg ?? resp.data?.error_msg ?? "");
     if (errcode !== 0) {
       await updateActive({
+        uuid,
         isLogin: false,
         lastEvent: "check_code:failed",
         lastError: errmsg || `check_code errcode=${errcode}`
@@ -577,9 +587,10 @@ app.post("/api/check-code", async (req, res) => {
 
     const loginState = extractLoginState(resp.data);
     if (loginState === true) {
-      await updateActive({ isLogin: true, lastEvent: "check_code:success", lastError: "" });
+      await updateActive({ uuid, isLogin: true, lastEvent: "check_code:success", lastError: "" });
     } else {
       await updateActive({
+        uuid,
         isLogin: false,
         lastEvent: "check_code:submitted_wait_callback",
         lastError: ""
@@ -609,6 +620,7 @@ app.post("/api/refresh-run-client", async (req, res) => {
     const loginState = extractLoginState(runByUuidResp.data);
     if (loginState !== null) {
       await updateActive({
+        uuid,
         isLogin: loginState,
         lastEvent: "refresh_status",
         lastError: ""
@@ -810,15 +822,18 @@ app.post("/callback/wxwork", async (req, res) => {
       qrcodeKey: qrcodeKey || active.qrcodeKey,
       lastEvent: `callback:${eventType}`
     });
-  } else {
+  } else if (active.uuid) {
     await updateActive({
+      uuid: active.uuid,
       qrcodeKey: qrcodeKey || active.qrcodeKey,
       lastEvent: `callback:${eventType}`
     });
   }
 
-  if (hasDisconnectSignal(text)) {
+  const disconnectUuid = maybeUuid || active.uuid;
+  if (hasDisconnectSignal(text) && disconnectUuid) {
     await updateActive({
+      uuid: disconnectUuid,
       isLogin: false,
       lastEvent: `callback:disconnect:${eventType}`
     });
@@ -831,12 +846,14 @@ app.post("/callback/wxwork", async (req, res) => {
 app.listen(config.port, async () => {
   try {
     await checkConnection();
-    console.log("[wxwork-demo] MySQL connected");
+    await checkTables();
+    console.log("[wxwork-demo] MySQL connected, tables verified");
   } catch (err) {
-    console.error("[wxwork-demo] MySQL connection failed:", err.message);
+    console.error("[wxwork-demo] MySQL startup check failed:", err.message);
     process.exit(1);
   }
   startMonitor();
+  startEventCleanup(60000); // 每 60 秒清理一次过期事件
   console.log(
     `[wxwork-demo] listening on http://localhost:${config.port} baseUrl=${config.baseUrl}`
   );
