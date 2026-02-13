@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { config, requireCallbackUrl } from "./config.js";
 import { checkConnection, checkTables } from "./db.js";
-import { getEvents, getLatestActive, pushEvent, startEventCleanup, store, updateActive } from "./store.js";
+import { getEvents, getEventsCount, getLatestActive, pushEvent, startEventCleanup, store, updateActive } from "./store.js";
 import {
   automaticLogin,
   checkCode,
@@ -316,27 +316,35 @@ app.get("/api/upstream-check", async (_req, res) => {
 });
 
 app.get("/api/state", async (_req, res) => {
-  const active = await getLatestActive();
-  const events = await getEvents();
-  res.json({
-    active,
-    monitor: {
-      enabled: store.monitor.enabled,
-      running: store.monitor.running,
-      lastCheckAt: store.monitor.lastCheckAt,
-      lastReconnectAt: store.monitor.lastReconnectAt,
-      reconnecting: store.monitor.reconnecting,
-      intervalMs: config.monitorIntervalMs
-    },
-    eventsCount: events.length,
-    baseUrl: config.baseUrl,
-    callbackUrl: config.callbackUrl || ""
-  });
+  try {
+    const active = await getLatestActive();
+    const eventsCount = await getEventsCount();
+    res.json({
+      active,
+      monitor: {
+        enabled: store.monitor.enabled,
+        running: store.monitor.running,
+        lastCheckAt: store.monitor.lastCheckAt,
+        lastReconnectAt: store.monitor.lastReconnectAt,
+        reconnecting: store.monitor.reconnecting,
+        intervalMs: config.monitorIntervalMs
+      },
+      eventsCount,
+      baseUrl: config.baseUrl,
+      callbackUrl: config.callbackUrl || ""
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, message: serializeError(error).message });
+  }
 });
 
 app.get("/api/events", async (_req, res) => {
-  const events = await getEvents();
-  res.json({ events });
+  try {
+    const events = await getEvents();
+    res.json({ events });
+  } catch (error) {
+    res.status(500).json({ ok: false, message: serializeError(error).message });
+  }
 });
 
 function buildInitPayload(body = {}) {
@@ -456,9 +464,9 @@ app.post("/api/set-callback", async (req, res) => {
 });
 
 app.post("/api/get-qrcode", async (req, res) => {
+  const active = await getLatestActive();
+  const uuid = String(req.body?.uuid || active.uuid || "");
   try {
-    const active = await getLatestActive();
-    const uuid = String(req.body?.uuid || active.uuid || "");
     if (!uuid) {
       return res.status(400).json({ ok: false, message: "缺少 uuid，请先初始化" });
     }
@@ -784,63 +792,70 @@ app.post("/api/contacts", async (req, res) => {
 });
 
 app.post("/callback/wxwork", async (req, res) => {
-  const payload = req.body || {};
-  const text = JSON.stringify(payload);
-  const maybeUuid =
-    payload.uuid ||
-    payload.data?.uuid ||
-    payload.client_uuid ||
-    payload.clientUuid ||
-    "";
-  const eventType =
-    payload.type ||
-    payload.msg_type ||
-    payload.event ||
-    payload.cmd ||
-    "callback";
-  const qrcodeKey = extractQrcodeKey(payload);
+  try {
+    const payload = req.body || {};
+    const text = JSON.stringify(payload);
+    const maybeUuid =
+      payload.uuid ||
+      payload.data?.uuid ||
+      payload.client_uuid ||
+      payload.clientUuid ||
+      "";
+    const eventType =
+      payload.type ||
+      payload.msg_type ||
+      payload.event ||
+      payload.cmd ||
+      "callback";
+    const qrcodeKey = extractQrcodeKey(payload);
 
-  await pushEvent({
-    stage: "callback",
-    eventType,
-    payload
-  });
+    await pushEvent({
+      stage: "callback",
+      eventType,
+      payload
+    });
 
-  const active = await getLatestActive();
-  const isLoginSuccess = /登录成功|login.*success|is_login/i.test(text);
-  if (isLoginSuccess) {
-    await updateActive({
-      isLogin: true,
-      uuid: maybeUuid || active.uuid,
-      qrcodeKey: qrcodeKey || active.qrcodeKey,
-      lastEvent: `callback:${eventType}`,
-      lastError: ""
-    });
-  } else if (maybeUuid) {
-    await updateActive({
-      uuid: maybeUuid,
-      qrcodeKey: qrcodeKey || active.qrcodeKey,
-      lastEvent: `callback:${eventType}`
-    });
-  } else if (active.uuid) {
-    await updateActive({
-      uuid: active.uuid,
-      qrcodeKey: qrcodeKey || active.qrcodeKey,
-      lastEvent: `callback:${eventType}`
-    });
+    const active = await getLatestActive();
+    const isLoginSuccess =
+      /登录成功|login.*success/i.test(text) ||
+      /"is_login"\s*:\s*"?true"?/i.test(text);
+    if (isLoginSuccess) {
+      await updateActive({
+        isLogin: true,
+        uuid: maybeUuid || active.uuid,
+        qrcodeKey: qrcodeKey || active.qrcodeKey,
+        lastEvent: `callback:${eventType}`,
+        lastError: ""
+      });
+    } else if (maybeUuid) {
+      await updateActive({
+        uuid: maybeUuid,
+        qrcodeKey: qrcodeKey || active.qrcodeKey,
+        lastEvent: `callback:${eventType}`
+      });
+    } else if (active.uuid) {
+      await updateActive({
+        uuid: active.uuid,
+        qrcodeKey: qrcodeKey || active.qrcodeKey,
+        lastEvent: `callback:${eventType}`
+      });
+    }
+
+    const disconnectUuid = maybeUuid || active.uuid;
+    if (hasDisconnectSignal(text) && disconnectUuid) {
+      await updateActive({
+        uuid: disconnectUuid,
+        isLogin: false,
+        lastEvent: `callback:disconnect:${eventType}`
+      });
+      void tryReconnect(`callback_${eventType}`);
+    }
+
+    res.json({ errcode: 0, errmsg: "ok" });
+  } catch (error) {
+    console.error("[callback] error:", error.message);
+    res.json({ errcode: 0, errmsg: "ok" });
   }
-
-  const disconnectUuid = maybeUuid || active.uuid;
-  if (hasDisconnectSignal(text) && disconnectUuid) {
-    await updateActive({
-      uuid: disconnectUuid,
-      isLogin: false,
-      lastEvent: `callback:disconnect:${eventType}`
-    });
-    void tryReconnect(`callback_${eventType}`);
-  }
-
-  res.json({ errcode: 0, errmsg: "ok" });
 });
 
 app.listen(config.port, async () => {

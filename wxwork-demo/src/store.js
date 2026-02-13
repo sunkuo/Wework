@@ -178,6 +178,11 @@ export function stopEventCleanup() {
   cleanupTimer = null;
 }
 
+export async function getEventsCount() {
+  const rows = await query("SELECT COUNT(*) AS cnt FROM events");
+  return rows[0]?.cnt || 0;
+}
+
 export async function getEvents(limit) {
   const rows = await query(
     "SELECT * FROM events ORDER BY created_at DESC LIMIT ?",
