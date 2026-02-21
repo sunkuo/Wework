@@ -438,7 +438,7 @@ export class WxWorkService implements OnModuleInit, OnModuleDestroy {
       45000,
     );
     this.monitorTimer = setInterval(() => {
-      this.checkOnlineAndMaybeReconnect('interval');
+      void this.checkOnlineAndMaybeReconnect('interval');
     }, interval);
   }
 

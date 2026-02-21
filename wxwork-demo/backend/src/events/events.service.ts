@@ -180,7 +180,10 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
 
   startCleanup(intervalMs = 60000) {
     if (this.cleanupTimer) clearInterval(this.cleanupTimer);
-    this.cleanupTimer = setInterval(() => this.cleanupOldEvents(), intervalMs);
+    this.cleanupTimer = setInterval(
+      () => void this.cleanupOldEvents(),
+      intervalMs,
+    );
   }
 
   stopCleanup() {
