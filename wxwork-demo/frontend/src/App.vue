@@ -1,7 +1,7 @@
 <template>
   <div class="app-container">
     <header>
-      <h1>WxWork Demo (Vue 3 + NestJS)</h1>
+      <h1>企业微信演示 (Vue 3 + NestJS)</h1>
     </header>
     <main>
       <Dashboard />
