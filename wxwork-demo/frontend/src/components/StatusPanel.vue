@@ -27,11 +27,12 @@
 <script setup lang="ts">
 import { useAppStore } from '../stores/app';
 import { startMonitor as apiStart, stopMonitor as apiStop } from '../api/wxwork';
-import { onMounted } from 'vue';
+import { onMounted, onUnmounted } from 'vue';
 
 const appStore = useAppStore();
 
 const refresh = () => appStore.fetchState();
+let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 const startMonitor = async () => {
   try {
@@ -53,7 +54,10 @@ const stopMonitor = async () => {
 
 onMounted(() => {
   refresh();
-  // Poll status every 5s
-  setInterval(refresh, 5000);
+  pollTimer = setInterval(refresh, 5000);
+});
+
+onUnmounted(() => {
+  if (pollTimer) clearInterval(pollTimer);
 });
 </script>

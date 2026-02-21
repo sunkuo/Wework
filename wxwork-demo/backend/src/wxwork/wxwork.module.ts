@@ -8,6 +8,6 @@ import { ConfigModule } from '@nestjs/config';
   imports: [EventsModule, ConfigModule],
   controllers: [WxWorkController],
   providers: [WxWorkService],
-  exports: [WxWorkService]
+  exports: [WxWorkService],
 })
 export class WxWorkModule {}

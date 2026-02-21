@@ -11,7 +11,7 @@ import { WxWorkModule } from './wxwork/wxwork.module';
     ConfigModule.forRoot({ isGlobal: true }),
     PrismaModule,
     EventsModule,
-    WxWorkModule
+    WxWorkModule,
   ],
   controllers: [AppController],
   providers: [AppService],

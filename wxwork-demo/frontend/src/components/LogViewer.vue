@@ -18,13 +18,18 @@
 
 <script setup lang="ts">
 import { useAppStore } from '../stores/app';
-import { onMounted } from 'vue';
+import { onMounted, onUnmounted } from 'vue';
 
 const appStore = useAppStore();
 const refresh = () => appStore.fetchEvents();
+let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 onMounted(() => {
   refresh();
-  setInterval(refresh, 5000);
+  pollTimer = setInterval(refresh, 5000);
+});
+
+onUnmounted(() => {
+  if (pollTimer) clearInterval(pollTimer);
 });
 </script>

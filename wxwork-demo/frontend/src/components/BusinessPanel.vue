@@ -8,7 +8,7 @@
       <el-tab-pane label="发送文本">
         <el-form :model="msgForm" label-width="100px" size="small">
           <el-form-item label="UUID">
-             <el-input v-model="appStore.active.uuid" disabled />
+             <el-input :model-value="appStore.active.uuid" disabled />
           </el-form-item>
           <el-form-item label="目标用户 ID">
             <el-input v-model="msgForm.send_userid" placeholder="接收者 ID" />

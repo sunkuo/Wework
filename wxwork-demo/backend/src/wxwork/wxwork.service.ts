@@ -1,4 +1,9 @@
-import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleInit,
+  OnModuleDestroy,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EventsService } from '../events/events.service';
 import { SessionService } from '../events/session.service';
@@ -11,7 +16,7 @@ export class WxWorkService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private configService: ConfigService,
     private eventsService: EventsService,
-    private sessionService: SessionService
+    private sessionService: SessionService,
   ) {}
 
   onModuleInit() {
@@ -23,7 +28,10 @@ export class WxWorkService implements OnModuleInit, OnModuleDestroy {
   }
 
   private get baseUrl() {
-    return this.configService.get<string>('BASE_URL', 'http://47.94.7.218:9952');
+    return this.configService.get<string>(
+      'BASE_URL',
+      'http://47.94.7.218:9952',
+    );
   }
 
   private get callbackUrl() {
@@ -31,7 +39,7 @@ export class WxWorkService implements OnModuleInit, OnModuleDestroy {
   }
 
   private joinUrl(path: string) {
-    return `${this.baseUrl.replace(/\/$/, "")}${path}`;
+    return `${this.baseUrl.replace(/\/$/, '')}${path}`;
   }
 
   private withTimeout(ms = 15000) {
@@ -43,14 +51,14 @@ export class WxWorkService implements OnModuleInit, OnModuleDestroy {
   private toNetworkError(error: any, url: string) {
     return {
       errcode: -1,
-      errmsg: "请求上游失败",
+      errmsg: '请求上游失败',
       detail: {
         message: error?.message || String(error),
-        causeMessage: error?.cause?.message || "",
-        code: error?.cause?.code || error?.code || "",
-        name: error?.name || "",
-        url
-      }
+        causeMessage: error?.cause?.message || '',
+        code: error?.cause?.code || error?.code || '',
+        name: error?.name || '',
+        url,
+      },
     };
   }
 
@@ -60,36 +68,37 @@ export class WxWorkService implements OnModuleInit, OnModuleDestroy {
     let resp: Response;
     try {
       resp = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body || {}),
-        signal: controller.signal
+        signal: controller.signal,
       });
     } catch (error: any) {
       clearTimeout(timer);
       return {
         ok: false,
         status: 0,
-        data: this.toNetworkError(error, url)
+        data: this.toNetworkError(error, url),
       };
     }
     clearTimeout(timer);
 
     let data: any;
+    const rawText = await resp.text();
     try {
-      data = await resp.json();
+      data = JSON.parse(rawText);
     } catch {
       data = {
         errcode: -1,
-        errmsg: "响应不是 JSON",
-        raw: await resp.text()
+        errmsg: '响应不是 JSON',
+        raw: rawText,
       };
     }
 
     return {
       ok: resp.ok,
       status: resp.status,
-      data
+      data,
     };
   }
 
@@ -97,64 +106,64 @@ export class WxWorkService implements OnModuleInit, OnModuleDestroy {
 
   async initClient(payload: any = {}) {
     const body = {
-      vid: "",
-      ip: "",
-      port: "",
-      proxyType: "",
-      userName: "",
-      passward: "",
+      vid: '',
+      ip: '',
+      port: '',
+      proxyType: '',
+      userName: '',
+      passward: '',
       proxySituation: 0,
-      deverType: "ipad",
-      ...payload
+      deverType: 'ipad',
+      ...payload,
     };
-    return this.postJson("/wxwork/init", body);
+    return this.postJson('/wxwork/init', body);
   }
 
   async setCallbackUrl(uuid: string, url: string) {
-    return this.postJson("/wxwork/SetCallbackUrl", {
+    return this.postJson('/wxwork/SetCallbackUrl', {
       uuid,
-      url
+      url,
     });
   }
 
   async getQrCode(uuid: string) {
-    return this.postJson("/wxwork/getQrCode", { uuid });
+    return this.postJson('/wxwork/getQrCode', { uuid });
   }
 
   async automaticLogin(uuid: string) {
-    return this.postJson("/wxwork/automaticLogin", { uuid });
+    return this.postJson('/wxwork/automaticLogin', { uuid });
   }
 
-  async checkCode(uuid: string, code: string, qrcodeKey: string = "") {
-    return this.postJson("/wxwork/CheckCode", {
+  async checkCode(uuid: string, code: string, qrcodeKey: string = '') {
+    return this.postJson('/wxwork/CheckCode', {
       uuid,
       qrcodeKey,
-      code
+      code,
     });
   }
 
-  async getRunClient(uuid: string = "") {
-    return this.postJson("/wxwork/GetRunClient", { uuid });
+  async getRunClient(uuid: string = '') {
+    return this.postJson('/wxwork/GetRunClient', { uuid });
   }
 
   async getRunClientByUuid(uuid: string) {
-    return this.postJson("/wxwork/GetRunClientByUuid", { uuid });
+    return this.postJson('/wxwork/GetRunClientByUuid', { uuid });
   }
 
   async sendTextMsg(payload: any = {}) {
-    return this.postJson("/wxwork/SendTextMsg", payload);
+    return this.postJson('/wxwork/SendTextMsg', payload);
   }
 
   async getInnerContacts(payload: any = {}) {
-    return this.postJson("/wxwork/GetInnerContacts", payload);
+    return this.postJson('/wxwork/GetInnerContacts', payload);
   }
 
   async getExternalContacts(payload: any = {}) {
-    return this.postJson("/wxwork/GetExternalContacts", payload);
+    return this.postJson('/wxwork/GetExternalContacts', payload);
   }
 
   async upstreamPing() {
-    return this.postJson("/wxwork/GetRunClient", {});
+    return this.postJson('/wxwork/GetRunClient', {});
   }
 
   // --- Helper Methods ---
@@ -164,10 +173,10 @@ export class WxWorkService implements OnModuleInit, OnModuleDestroy {
       payload?.data,
       payload?.req,
       payload?.response,
-      payload?.raw
+      payload?.raw,
     ];
     for (const raw of maybeJsonStrings) {
-      if (typeof raw === "string" && raw.trim().startsWith("{")) {
+      if (typeof raw === 'string' && raw.trim().startsWith('{')) {
         try {
           const obj = JSON.parse(raw);
           const nestedKey = this.extractQrcodeKey(obj);
@@ -199,7 +208,7 @@ export class WxWorkService implements OnModuleInit, OnModuleDestroy {
       payload?.response?.data?.key ||
       payload?.response?.qrcodeKey ||
       payload?.response?.qrcode_key ||
-      "";
+      '';
     if (direct) return String(direct);
 
     const qrUrl =
@@ -207,23 +216,25 @@ export class WxWorkService implements OnModuleInit, OnModuleDestroy {
       payload?.data?.qrCode ||
       payload?.qrcode ||
       payload?.qrCode ||
-      "";
+      '';
     if (qrUrl) {
-      const match = String(qrUrl).match(/\/([^/?.]+)\.(?:png|jpg|jpeg)(?:\?|$)/i);
+      const match = String(qrUrl).match(
+        /\/([^/?.]+)\.(?:png|jpg|jpeg)(?:\?|$)/i,
+      );
       if (match?.[1]) return match[1];
     }
 
-    return "";
+    return '';
   }
 
   public normalizeBool(val: any) {
     if (val === true || val === false) return val;
-    if (typeof val === "string") {
+    if (typeof val === 'string') {
       const s = val.trim().toLowerCase();
-      if (["true", "1", "yes", "ok"].includes(s)) return true;
-      if (["false", "0", "no"].includes(s)) return false;
+      if (['true', '1', 'yes', 'ok'].includes(s)) return true;
+      if (['false', '0', 'no'].includes(s)) return false;
     }
-    if (typeof val === "number") return val !== 0;
+    if (typeof val === 'number') return val !== 0;
     return null;
   }
 
@@ -234,7 +245,7 @@ export class WxWorkService implements OnModuleInit, OnModuleDestroy {
       payload?.data?.isLogin,
       payload?.data?.is_login,
       payload?.data?.user?.isLogin,
-      payload?.data?.user?.is_login
+      payload?.data?.user?.is_login,
     ];
     for (const c of candidates) {
       const b = this.normalizeBool(c);
@@ -246,9 +257,9 @@ export class WxWorkService implements OnModuleInit, OnModuleDestroy {
   private serializeError(error: any) {
     return {
       message: String(error?.message || error),
-      name: error?.name || "",
-      code: error?.code || error?.cause?.code || "",
-      causeMessage: error?.cause?.message || ""
+      name: error?.name || '',
+      code: error?.code || error?.cause?.code || '',
+      causeMessage: error?.cause?.message || '',
     };
   }
 
@@ -257,59 +268,61 @@ export class WxWorkService implements OnModuleInit, OnModuleDestroy {
   async tryReconnect(reason: string) {
     const monitor = this.eventsService.monitor;
     if (monitor.reconnecting) return;
-    
+
     const active = await this.sessionService.getLatestActive();
     if (!active.vid) return;
 
     monitor.reconnecting = true;
     monitor.lastReconnectAt = new Date().toISOString();
-    let uuid = "";
+    let uuid = '';
 
     try {
       if (!this.callbackUrl) {
-         throw new Error("CALLBACK_URL 未配置");
+        throw new Error('CALLBACK_URL 未配置');
       }
 
       const initResp = await this.initClient({ vid: active.vid });
       const initData = initResp.data?.data || {};
-      uuid = initData.uuid || initResp.data?.uuid || "";
+      uuid = initData.uuid || initResp.data?.uuid || '';
       if (!uuid) {
-        throw new Error(`重连 init 未返回 uuid: ${JSON.stringify(initResp.data)}`);
+        throw new Error(
+          `重连 init 未返回 uuid: ${JSON.stringify(initResp.data)}`,
+        );
       }
       await this.sessionService.updateActive({
         uuid,
         isLogin: false,
-        qrcode: "",
-        qrcodeKey: "",
+        qrcode: '',
+        qrcodeKey: '',
         lastEvent: `reconnect:init:${reason}`,
-        lastError: ""
+        lastError: '',
       });
 
       const cbResp = await this.setCallbackUrl(uuid, this.callbackUrl);
       await this.eventsService.pushEvent({
-        stage: "reconnect_set_callback",
+        stage: 'reconnect_set_callback',
         request: { uuid, reason },
-        response: cbResp.data
+        response: cbResp.data,
       });
 
       const autoResp = await this.automaticLogin(uuid);
       await this.eventsService.pushEvent({
-        stage: "reconnect_automatic_login",
+        stage: 'reconnect_automatic_login',
         request: { uuid, reason },
-        response: autoResp.data
+        response: autoResp.data,
       });
 
       const okText = JSON.stringify(autoResp.data || {});
       const autoOk =
-        String(autoResp.data?.errcode ?? autoResp.data?.error_code ?? "0") === "0" &&
-        !/失败|error|fail/i.test(okText);
-        
+        String(autoResp.data?.errcode ?? autoResp.data?.error_code ?? '0') ===
+          '0' && !/失败|error|fail/i.test(okText);
+
       if (autoOk) {
         await this.sessionService.updateActive({
           uuid,
           isLogin: true,
           lastEvent: `reconnect:auto_success:${reason}`,
-          lastError: ""
+          lastError: '',
         });
         return;
       }
@@ -322,23 +335,22 @@ export class WxWorkService implements OnModuleInit, OnModuleDestroy {
         qrData.qrcode_data ||
         qrData.url ||
         qrResp.data?.qrcode ||
-        "";
+        '';
       const qrcodeKey = this.extractQrcodeKey(qrResp.data);
-      
+
       await this.sessionService.updateActive({
         uuid,
         qrcode,
         qrcodeKey,
         isLogin: false,
         lastEvent: `reconnect:qrcode_ready:${reason}`,
-        lastError: qrcode ? "" : "重连自动登录失败且未获取到二维码"
+        lastError: qrcode ? '' : '重连自动登录失败且未获取到二维码',
       });
       await this.eventsService.pushEvent({
-        stage: "reconnect_get_qrcode",
+        stage: 'reconnect_get_qrcode',
         request: { uuid, reason },
-        response: qrResp.data
+        response: qrResp.data,
       });
-
     } catch (error: any) {
       const detail = this.serializeError(error);
       const fallbackUuid = uuid || active.uuid;
@@ -346,37 +358,41 @@ export class WxWorkService implements OnModuleInit, OnModuleDestroy {
         await this.sessionService.safeUpdateActive({
           uuid: fallbackUuid,
           lastError: `重连失败: ${detail.message}`,
-          lastEvent: `reconnect:error:${reason}`
+          lastEvent: `reconnect:error:${reason}`,
         });
       }
-      await this.eventsService.safePushEvent({ stage: "reconnect_error", reason, error: detail });
+      await this.eventsService.safePushEvent({
+        stage: 'reconnect_error',
+        reason,
+        error: detail,
+      });
     } finally {
       monitor.reconnecting = false;
     }
   }
 
-  async checkOnlineAndMaybeReconnect(reason = "poll") {
+  async checkOnlineAndMaybeReconnect(reason = 'poll') {
     const active = await this.sessionService.getLatestActive();
     if (!active.uuid) return;
-    
+
     const monitor = this.eventsService.monitor;
     monitor.running = true;
     monitor.lastCheckAt = new Date().toISOString();
-    
+
     try {
       const resp = await this.getRunClientByUuid(active.uuid);
       await this.eventsService.pushEvent({
-        stage: "monitor_check",
+        stage: 'monitor_check',
         request: { uuid: active.uuid, reason },
-        response: resp.data
+        response: resp.data,
       });
-      
+
       const text = JSON.stringify(resp.data || {});
       const errcode = resp.data?.errcode ?? resp.data?.error_code;
       const loginState = this.extractLoginState(resp.data);
       const maybeOffline =
         loginState === false ||
-        String(errcode || "0") !== "0" ||
+        String(errcode || '0') !== '0' ||
         /未登录|离线|不存在|not.*found|offline|disconnect/i.test(text);
 
       if (maybeOffline) {
@@ -384,7 +400,7 @@ export class WxWorkService implements OnModuleInit, OnModuleDestroy {
           uuid: active.uuid,
           isLogin: false,
           lastEvent: `monitor:offline:${reason}`,
-          lastError: `检测离线: errcode=${errcode ?? "unknown"}`
+          lastError: `检测离线: errcode=${errcode ?? 'unknown'}`,
         });
         await this.tryReconnect(`monitor_${reason}`);
       } else {
@@ -395,13 +411,20 @@ export class WxWorkService implements OnModuleInit, OnModuleDestroy {
           uuid: active.uuid,
           isLogin: online,
           lastEvent: `monitor:online:${reason}`,
-          lastError: ""
+          lastError: '',
         });
       }
     } catch (error: any) {
       const detail = this.serializeError(error);
-      await this.eventsService.safePushEvent({ stage: "monitor_check_error", reason, error: detail });
-      await this.sessionService.safeUpdateActive({ uuid: active.uuid, lastError: `状态检测失败: ${detail.message}` });
+      await this.eventsService.safePushEvent({
+        stage: 'monitor_check_error',
+        reason,
+        error: detail,
+      });
+      await this.sessionService.safeUpdateActive({
+        uuid: active.uuid,
+        lastError: `状态检测失败: ${detail.message}`,
+      });
     } finally {
       monitor.running = false;
     }
@@ -410,9 +433,12 @@ export class WxWorkService implements OnModuleInit, OnModuleDestroy {
   startMonitor() {
     if (this.monitorTimer) clearInterval(this.monitorTimer);
     this.eventsService.monitor.enabled = true;
-    const interval = this.configService.get<number>('MONITOR_INTERVAL_MS', 45000);
+    const interval = this.configService.get<number>(
+      'MONITOR_INTERVAL_MS',
+      45000,
+    );
     this.monitorTimer = setInterval(() => {
-      this.checkOnlineAndMaybeReconnect("interval");
+      this.checkOnlineAndMaybeReconnect('interval');
     }, interval);
   }
 
