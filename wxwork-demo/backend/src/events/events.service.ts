@@ -70,8 +70,9 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (typeof value === 'object') {
-      const out: any = {};
-      for (const [k, v] of Object.entries(value)) {
+      const record = value as Record<string, unknown>;
+      const out: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(record)) {
         out[k] = this.sanitizeForLog(v, k, depth + 1);
       }
       return out;

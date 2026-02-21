@@ -380,7 +380,8 @@ export class WxWorkService implements OnModuleInit, OnModuleDestroy {
     monitor.lastCheckAt = new Date().toISOString();
 
     try {
-      const resp = await this.getRunClientByUuid(active.uuid);
+      const activeUuid = typeof active.uuid === 'string' ? active.uuid : '';
+      const resp = await this.getRunClientByUuid(activeUuid);
       await this.eventsService.pushEvent({
         stage: 'monitor_check',
         request: { uuid: active.uuid, reason },
